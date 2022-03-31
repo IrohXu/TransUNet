@@ -383,16 +383,17 @@ class VisionTransformer(nn.Module):
             kernel_size=3,
         )
         self.config = config
-        self.mask_enlarge = nn.Upsample(scale_factor = 16)
+        self.mask = config.mask
+        self.mask_enlarge = nn.Upsample(scale_factor = config.mask_patch)
+        self.mask_patch = config.mask_patch
     
     def forward(self, x, mask=None):
         if x.size()[1] == 1:
             x = x.repeat(1,3,1,1)
         
         B, _, H, W = x.shape
-        
-        if mask != None:
-            mask = mask.reshape(B, H // 16, W // 16, -1).permute(0, 3, 1, 2).contiguous()
+        if self.mask and mask != None:
+            mask = mask.reshape(B, H // self.mask_patch, W // self.mask_patch, -1).permute(0, 3, 1, 2).contiguous()
             mask_layer = mask.type(torch.FloatTensor).cuda(non_blocking=True)
             mask_layer = self.mask_enlarge(mask_layer)
             mask = mask_layer.squeeze(1)
@@ -400,8 +401,15 @@ class VisionTransformer(nn.Module):
             x = x.permute(0, 2, 3, 1).contiguous()        
             x[mask,:] = 0
             x = x.permute(0, 3, 1, 2).contiguous()
-            mask_input = x
+            # mask_input = x
+            # import matplotlib.pyplot as plt
+            # plt.imsave('b.png', mask[0].cpu().numpy())
             x = torch.cat([x, mask_layer], dim=1)
+        else:
+            zero_mask = torch.zeros((B, 1, H, W)).cuda(non_blocking=True)
+            x = torch.cat([x, zero_mask], dim=1)
+        
+        print(x.shape)
                             
         x, attn_weights, features = self.transformer(x)  # (B, n_patch, hidden)
         
@@ -507,5 +515,7 @@ mask_generator = RandomMaskingGenerator(int(224 / 16), 0.75)
 fake_mask = torch.Tensor(mask_generator())
 fake_mask = fake_mask.unsqueeze(0)
 fake_output = net(fake_input.cuda(), fake_mask.cuda())
+print(fake_output.shape)
+fake_output = net(fake_input.cuda())
 print(fake_output.shape)
 

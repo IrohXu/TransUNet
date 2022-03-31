@@ -54,7 +54,8 @@ def get_r50_b16_config():
     config.n_classes = 2
     config.n_skip = 3
     config.activation = 'softmax'
-
+    config.mask = True
+    config.mask_patch = 16
     return config
 
 
@@ -103,6 +104,8 @@ def get_r50_l16_config():
     config.skip_channels = [512, 256, 64, 16]
     config.n_classes = 2
     config.activation = 'softmax'
+    config.mask = True
+    config.mask_patch = 16
     return config
 
 
