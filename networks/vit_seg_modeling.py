@@ -16,8 +16,10 @@ import numpy as np
 from torch.nn import CrossEntropyLoss, Dropout, Softmax, Linear, Conv2d, LayerNorm
 from torch.nn.modules.utils import _pair
 from scipy import ndimage
-from . import vit_seg_configs as configs
-from .vit_seg_modeling_resnet_skip import ResNetV2
+# from . import vit_seg_configs as configs
+# from .vit_seg_modeling_resnet_skip import ResNetV2
+import vit_seg_configs as configs
+from vit_seg_modeling_resnet_skip import ResNetV2
 
 
 logger = logging.getLogger(__name__)
@@ -122,7 +124,7 @@ class Mlp(nn.Module):
 class Embeddings(nn.Module):
     """Construct the embeddings from patch, position embeddings.
     """
-    def __init__(self, config, img_size, in_channels=3):
+    def __init__(self, config, img_size, in_channels=4):
         super(Embeddings, self).__init__()
         self.hybrid = None
         self.config = config
@@ -381,11 +383,30 @@ class VisionTransformer(nn.Module):
             kernel_size=3,
         )
         self.config = config
-
-    def forward(self, x):
+        self.mask_enlarge = nn.Upsample(scale_factor = 16)
+    
+    def forward(self, x, mask=None):
         if x.size()[1] == 1:
             x = x.repeat(1,3,1,1)
+        
+        B, _, H, W = x.shape
+        
+        if mask != None:
+            mask = mask.reshape(B, H // 16, W // 16, -1).permute(0, 3, 1, 2).contiguous()
+            mask_layer = mask.type(torch.FloatTensor).cuda(non_blocking=True)
+            mask_layer = self.mask_enlarge(mask_layer)
+            mask = mask_layer.squeeze(1)
+            mask = mask.type(torch.BoolTensor).cuda(non_blocking=True)
+            x = x.permute(0, 2, 3, 1).contiguous()        
+            x[mask,:] = 0
+            x = x.permute(0, 3, 1, 2).contiguous()
+            mask_input = x
+            x = torch.cat([x, mask_layer], dim=1)
+                            
         x, attn_weights, features = self.transformer(x)  # (B, n_patch, hidden)
+        
+        print(x.shape)
+        
         x = self.decoder(x, features)
         logits = self.segmentation_head(x)
         return logits
@@ -450,4 +471,41 @@ CONFIGS = {
     'testing': configs.get_testing(),
 }
 
+class RandomMaskingGenerator:
+    def __init__(self, input_size, mask_ratio):
+        if not isinstance(input_size, tuple):
+            input_size = (input_size,) * 2
+
+        self.height, self.width = input_size
+
+        self.num_patches = self.height * self.width
+        self.num_mask = int(mask_ratio * self.num_patches)
+
+    def __repr__(self):
+        repr_str = "Maks: total patches {}, mask patches {}".format(
+            self.num_patches, self.num_mask
+        )
+        return repr_str
+
+    def __call__(self):
+        mask = np.hstack([
+            np.zeros(self.num_patches - self.num_mask),
+            np.ones(self.num_mask),
+        ])
+        np.random.shuffle(mask)
+        return mask
+
+from torch.autograd import Variable
+
+config_vit = CONFIGS['R50-ViT-B_16']
+config_vit.n_classes = 9
+config_vit.n_skip = 3
+config_vit.patches.grid = (int(224 / 16), int(224 / 16))
+net = VisionTransformer(config_vit, img_size=224, num_classes=9).cuda()
+fake_input = Variable(torch.randn(1, 3, 224, 224))
+mask_generator = RandomMaskingGenerator(int(224 / 16), 0.75)
+fake_mask = torch.Tensor(mask_generator())
+fake_mask = fake_mask.unsqueeze(0)
+fake_output = net(fake_input.cuda(), fake_mask.cuda())
+print(fake_output.shape)
 
